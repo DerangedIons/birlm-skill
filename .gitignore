@@ -6,4 +6,5 @@ __pycache__/
 build/
 /scripts/jl/Manifest.toml
 .bimgrl-workspace/
+.birlm-workspace/
 scripts/jl/instantiate.log
