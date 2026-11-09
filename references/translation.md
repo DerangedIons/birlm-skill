@@ -4,7 +4,7 @@ The deterministic pipeline keys off gotranx's `.ode` form: it gives the symbolic
 
 ## When to translate and when to go native
 
-Translate when the goal is a generated BIMGRL scheme for the model (C, Python, Julia or CytoZoo) and the model is a plain right-hand side. Stay native (the adapter of `contracts.md` plus the recipe of `implementing-blocks.md`) when the integrator itself is the product, hand-optimised and must keep its own code, as for TWorld.jl, or when the model uses constructs the `.ode` grammar has no spelling for (data-dependent loops, lookup tables, external inputs). The analyses run on both; codegen and the automated sweep run only on the canonical path.
+Translate when the goal is a generated block Rush-Larsen scheme (BIRL-M or BIMGRL) for the model (C, Python, Julia or CytoZoo) and the model is a plain right-hand side. Stay native (the adapter of `contracts.md` plus the recipe of `implementing-blocks.md`) when the integrator itself is the product, hand-optimised and must keep its own code, as for TWorld.jl, or when the model uses constructs the `.ode` grammar has no spelling for (data-dependent loops, lookup tables, external inputs). The analyses run on both; codegen and the automated sweep run only on the canonical path.
 
 ## `.ode` essentials
 

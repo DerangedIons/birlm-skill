@@ -1,4 +1,4 @@
-# bimgrl
+# birlm
 
 A Claude Code and Codex skill that applies gotranx's block Rush–Larsen scheme to a cardiac cell model, by default as BIRL-M (Rush–Larsen base with implicit and sub-step blocks and frozen boundary fluxes, the scheme of the blocked-rush-larsen 40-model survey) and optionally as BIMGRL (generalised Rush–Larsen base), with deterministic scripts for everything that is arithmetic and the agent reserved for the judgment calls. It is the workflow of the paper *Targeted implicit integration accelerates tissue simulations of advanced cardiac cell models* and of its survey, distributed as a Claude and Codex skill.
 
@@ -9,20 +9,20 @@ The problem it solves: Rush–Larsen schemes advance each state alone, exponenti
 As a Claude Code plugin (Claude Code 2.1.275 or later). The agent builds the Python environment and installs gotranx on first use (Setup in `SKILL.md`), again after each plugin update since every version is its own copy; gotranx needs access to the fork, see below.
 
 ```
-/plugin install bimgrl --marketplace DerangedIons/bimgrl-skill
+/plugin install birlm --marketplace DerangedIons/birlm-skill
 ```
 
 From a clone, which is also how Codex reads it:
 
 ```sh
-git clone <this repository> ~/dev/bimgrl-skill
-cd ~/dev/bimgrl-skill
+git clone git@github.com:DerangedIons/birlm-skill.git ~/dev/birlm-skill
+cd ~/dev/birlm-skill
 uv venv && uv pip install -e .          # numpy, scipy, sympy, myokit, lxml
 uv run bimgrl setup                      # gotranx from config.toml (or GOTRANX_SRC=/path/to/clone)
-ln -s ~/dev/bimgrl-skill ~/dotfiles/llm/skills/bimgrl   # the folder both Claude Code and Codex read
+ln -s ~/dev/birlm-skill ~/dotfiles/llm/skills/birlm     # the folder both Claude Code and Codex read
 ```
 
-`bimgrl setup` installs gotranx from the spec in `config.toml`. The `block_rush_larsen` scheme, `suggest-blocks` and the symbolic Jacobian live in the DerangedIons fork until they are upstreamed, so this needs access to that repository or a local clone at the pinned commit (`feat/block-rush-larsen` at `e30efec` or later, the first with `base_scheme` and `freeze_boundary_fluxes`). A C compiler (`gcc`, or `CC`) is needed for the sweep. The Julia helpers under `scripts/jl/` need Julia 1.10 or later and instantiate their own project on first use.
+The skill is `birlm`; its command-line tool keeps the name `bimgrl`. `bimgrl setup` installs gotranx from the spec in `config.toml`. The `block_rush_larsen` scheme, `suggest-blocks` and the symbolic Jacobian live in the DerangedIons fork until they are upstreamed, so this needs access to that repository or a local clone at the pinned commit (`feat/block-rush-larsen` at `e30efec` or later, the first with `base_scheme` and `freeze_boundary_fluxes`). A C compiler (`gcc`, or `CC`) is needed for the sweep. The Julia helpers under `scripts/jl/` need Julia 1.10 or later and instantiate their own project on first use.
 
 ## Commands, in pipeline order
 

@@ -1,7 +1,7 @@
 [project]
 name = "bimgrl"
 version = "0.2.0"
-description = "Apply the block-implicit multirate generalized Rush-Larsen (BIMGRL) scheme to a cardiac cell model: stiffness, invariants, blocks, codegen, validation"
+description = "Apply block Rush-Larsen (BIRL-M by default, or the paper's BIMGRL) to a cardiac cell model: stiffness, invariants, blocks, codegen, validation"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"

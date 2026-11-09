@@ -119,7 +119,7 @@ What every scheme in every language writes for validation, and what `bimgrl refe
 
 ```json
 {
-  "model": "tworld", "scheme": "BIMGRL", "dt": 0.1, "reference": false,
+  "model": "tworld", "scheme": "BIRL-M", "dt": 0.1, "reference": false,
   "solver": {}, "language": "julia", "t_unit": "ms",
   "protocol": "B", "beats": 10, "bcl": 1000.0,
   "stimulus": {"start": 0.0, "duration": 1.0, "period": 1000.0, "amplitude": -53.0},
