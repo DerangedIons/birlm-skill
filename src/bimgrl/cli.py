@@ -13,6 +13,48 @@ def _ws(args):
     return Workspace(Path(args.model_dir))
 
 
+def _clock(args):
+    """The session clock of the model directory, or None (none started, or --ignore-clock)"""
+    from .clock import Clock
+
+    if getattr(args, "ignore_clock", False) or not getattr(args, "model_dir", None):
+        return None
+    return Clock.load(Path(args.model_dir).resolve() / "bimgrl")
+
+
+def _cut(args, clock, key: str) -> bool:
+    """True, with the message and a line in clock.json, if the clock has cut the step `key`"""
+    why = clock.cut(key) if clock else None
+    if why:
+        clock.skip(" ".join(sys.argv[1:]) or args.command, why)
+        print(f"skipped by the session clock: {why} (--ignore-clock overrides)")
+    return bool(why)
+
+
+def cmd_clock(args):
+    from .clock import LADDER, Clock, hm, parse_duration
+
+    out = Path(args.model_dir).resolve() / "bimgrl"
+    clock = Clock.load(out)
+    if args.start or args.start_at is not None:
+        if clock is not None and args.start_at is None:
+            raise SystemExit(f"the clock is already running ({clock.line()}); --start-at EPOCH moves its start")
+        if clock is None:
+            clock = Clock.start(out, args.start_at)
+        else:
+            clock.data["started_at"] = args.start_at
+    if clock is None:
+        raise SystemExit(f"no session clock in {out}: start one with `bimgrl clock {args.model_dir} --start`")
+    if args.limit:
+        clock.data["limit_s"] = parse_duration(args.limit)
+    clock.save()
+    left = clock.remaining()
+    for mark, _, what in LADDER:
+        print(f"{'cut    ' if left < mark else 'allowed'}  (cut under {hm(mark)} left)  {what}")
+    for s in clock.data.get("skipped", []):
+        print(f"skipped: {s['command']}  ({s['why']})")
+
+
 def cmd_setup(args):
     from . import setup
 
@@ -91,19 +133,38 @@ def cmd_fidelity(args):
 def cmd_sweep(args):
     from . import sweep
 
+    from .clock import MAIN_SCHEMES
+
     ws = _ws(args)
     dts = [float(x) for x in args.dt.split(",")] if args.dt else None
     labels = args.scheme.split(",")
+    clock = _clock(args)
+    stability = args.stability
+    if clock is not None:
+        if _cut(args, clock, "sweep") or (args.beats > 10 and _cut(args, clock, "long")) or (args.force and _cut(args, clock, "tuning")):
+            return
+        why = clock.cut("extras")
+        dropped = [x for x in labels if x not in MAIN_SCHEMES]
+        if why and (dropped or stability):
+            labels, stability = [x for x in labels if x in MAIN_SCHEMES], False
+            clock.skip(" ".join(sys.argv[1:]), f"{why}: dropped {','.join(dropped) or 'the stability bisection'}")
+            print(f"skipped by the session clock: {why}; sweeping {','.join(labels) or 'nothing'} (--ignore-clock overrides)")
+            if not labels:
+                return
     sweep.sweep(ws, labels, args.protocol, args.beats, dts, args.budget, args.blocks, args.suggested,
-                stability=args.stability, save_traces=args.save_traces, force=args.force)
-    if args.time:
-        sweep.time_rows(ws, labels, args.protocol, blocks_file=args.blocks)
+                stability=stability, save_traces=args.save_traces, force=args.force, clock=clock)
+    if args.time and not _cut(args, clock, "timing"):
+        sweep.time_rows(ws, labels, args.protocol, blocks_file=args.blocks, clock=clock)
 
 
 def cmd_time(args):
     from . import sweep
 
-    sweep.time_rows(_ws(args), args.scheme.split(","), args.protocol, beats_timed=args.beats, repeats=args.repeats, blocks_file=args.blocks)
+    clock = _clock(args)
+    if _cut(args, clock, "timing"):
+        return
+    sweep.time_rows(_ws(args), args.scheme.split(","), args.protocol, beats_timed=args.beats, repeats=args.repeats,
+                    blocks_file=args.blocks, clock=clock)
 
 
 def cmd_propose(args):
@@ -142,6 +203,8 @@ def cmd_log(args):
 def cmd_report(args):
     from . import report
 
+    if _cut(args, _clock(args), "timing"):
+        return
     report.run(_ws(args), protocol=args.protocol, baseline=args.baseline, new=args.new)
 
 
@@ -151,6 +214,13 @@ def main(argv=None):
 
     parser = argparse.ArgumentParser(prog="bimgrl", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
+
+    p = sub.add_parser("clock", help="start or show the session clock (3 h from preflight to generated code)")
+    p.add_argument("model_dir")
+    p.add_argument("--start", action="store_true", help="start the clock now")
+    p.add_argument("--start-at", type=float, default=None, help="start it at this epoch time (clock_start of env-check.sh)")
+    p.add_argument("--limit", default=None, help="the session limit, e.g. 3h, 90m (default 3h)")
+    p.set_defaults(func=cmd_clock)
 
     p = sub.add_parser("setup", help="install gotranx into the skill environment from config.toml")
     p.add_argument("--skill-dir", default=None)
@@ -226,6 +296,7 @@ def main(argv=None):
     p.add_argument("--save-traces", action="store_true")
     p.add_argument("--time", action="store_true", help="also time every ok run (serial, best of 5)")
     p.add_argument("--force", action="store_true", help="rerun rows that exist")
+    p.add_argument("--ignore-clock", action="store_true", help="run whatever the session clock says")
     p.set_defaults(func=cmd_sweep)
 
     p = sub.add_parser("time", help="time the ok runs of the sweep (one beat, best of N)")
@@ -235,6 +306,7 @@ def main(argv=None):
     p.add_argument("--beats", type=int, default=1)
     p.add_argument("--repeats", type=int, default=5)
     p.add_argument("--blocks", default=None)
+    p.add_argument("--ignore-clock", action="store_true", help="run whatever the session clock says")
     p.set_defaults(func=cmd_time)
 
     p = sub.add_parser("propose", help="propose blocks.toml by the rules of the base scheme from structure, invariants, stiffness")
@@ -281,15 +353,26 @@ def main(argv=None):
     p.add_argument("--protocol", default="B")
     p.add_argument("--baseline", default="RL")
     p.add_argument("--new", default=None, help="the scheme compared with the baseline (default BIRL-M, or BIMGRL against GRL)")
+    p.add_argument("--ignore-clock", action="store_true", help="run whatever the session clock says")
     p.set_defaults(func=cmd_report)
 
     args = parser.parse_args(argv)
+    import time
+
+    started, tic = time.time(), time.perf_counter()
     try:
         args.func(args)
     except SystemExit:
         raise
     except KeyboardInterrupt:
         sys.exit(130)
+    finally:
+        # read again: the command may have started the clock or logged a skip
+        clock = _clock(argparse.Namespace(model_dir=getattr(args, "model_dir", None)))
+        if clock is not None:
+            if args.command != "clock":
+                clock.record(" ".join(sys.argv[1:]) or args.command, started, time.perf_counter() - tic)
+            print(clock.line(), flush=True)
 
 
 if __name__ == "__main__":

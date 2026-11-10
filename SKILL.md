@@ -32,6 +32,28 @@ It prints what is installed (uv, Python, a C compiler, Julia, MATLAB, Octave, th
 
 **Gate P** (always): the output language of the stepper. Use it without asking only if the user named it, or the project carries the markers of exactly one language and the model is in that language. Otherwise ask, offering what gotranx generates (C, C++, CUDA, Python, Julia, CytoZoo) and MATLAB, installed languages first. The answer changes only the final `codegen` and its check, never the analysis.
 
+## Time budget (every run)
+
+A run takes at most 3 hours of real time, from the preflight to the generated code, the time spent waiting at the gates included. It is a deadline, not a sum of run times: the clock starts at the preflight and keeps running while a question is open, so a slow gate is paid for with the optional steps, never with a longer session. Start it as soon as the model directory exists, with the `clock_start` the preflight printed:
+
+```
+bimgrl clock <model_dir> --start-at <clock_start>      # no preflight value: --start
+```
+
+Every command then ends with one line, `clock: 0h42 used, 2h18 left of 3h00 | full`, and sizes its own work to the time left: a sweep declines a run it cannot afford (status `budget`, message `clock: ...`) instead of descending the grid. As the time left falls, the commands cut the optional steps themselves, in this order:
+
+| time left | cut |
+|---|---|
+| under 75 min | the 100-beat confirmation |
+| under 60 min | `time` and `report` |
+| under 45 min | further tuning rounds |
+| under 30 min | the comparison schemes (`BIRL`, `-auto`, `-unfrozen`, the baseline) and the stability bisection |
+| under 15 min | every sweep: `codegen` and the hand-back only |
+
+A cut step prints `skipped by the session clock: ...` and is recorded in `bimgrl/clock.json`. Follow the line: do not rerun a skipped step another way, and do not pass `--ignore-clock` unless the user asks for the step by name. `codegen` is never cut. What is never traded away is the validation: the code handed back is the BIRL-M configuration of a 10-beat sweep row that passed the moderate thresholds. If the 15-minute mark arrives with no such row, stop and say which phases took the time (`clock.json` lists every command with its wall time) rather than hand back code that was not validated.
+
+At every gate, give the time left in the question and put the rule's default first, so that an answer costs one keystroke.
+
 ## Setup (once per machine)
 
 ```
@@ -132,7 +154,7 @@ bimgrl log <model_dir> --round N --change "..." --result "..." --decision "adopt
 bimgrl sweep <model_dir> --scheme BIRL-M --force
 ```
 
-**Gate 8** (every round): the change and its reason before the edit; the numbers before the decision. Stop after four rounds or when the moderate thresholds hold at a step at least ten times the baseline's; `--freeze` stamps the round into `blocks.toml`. Blocks are frozen before any timing.
+**Gate 8** (every round): the change and its reason before the edit; the numbers before the decision. Stop after four rounds, when the session clock has cut the tuning rounds, or when the moderate thresholds hold at a step at least ten times the baseline's; `--freeze` stamps the round into `blocks.toml`. Blocks are frozen before any timing.
 
 ### 9. Time and report
 
@@ -143,7 +165,7 @@ bimgrl report <model_dir>                          # GRL path: --baseline GRL (c
 bimgrl codegen <model_dir> --backend c|cpp|cuda|python|julia|cytozoo --scheme BIRL-M
 ```
 
-The 100-beat run confirms the configuration chosen at beat 10 still holds (in the survey, 33 of 39 models kept the moderate thresholds over 100 beats with BIRL-M and 28 with RL, the failures just above a threshold). `time` measures the cost per beat in C, best of five, on one core; `report` picks the cheapest passing run of each scheme (not the largest step: with sub-steps a larger step can be slower, BIRL-M in T-World took 15 ms per beat at dt 0.1 and 50 at 0.5), the speed-ups at both threshold sets, the measured against the predicted stability limits, the Table-S1 row and an error-vs-cost figure. `codegen` emits the chosen scheme for the target settled at Gate P. gotranx has no MATLAB backend: a MATLAB target is translated from the Julia output and stays *unverified* until its trace reproduces the generated stepper's biomarkers (`references/environment.md`). When the target is tissue or a GPU, read `references/tissue-and-backends.md` before handing back: the splitting, not the cell model, limits dt there, and a sub-step block that pays in one cell (the dyad) can cost at every step. Hand back `report.md`, the frozen `blocks.toml`, `NOTES.md`, and a paragraph in the paper's style (which modes limited the step, which blocks removed them, the speed-up at matched accuracy).
+The 100-beat run confirms the configuration chosen at beat 10 still holds (in the survey, 33 of 39 models kept the moderate thresholds over 100 beats with BIRL-M and 28 with RL, the failures just above a threshold). `time` measures the cost per beat in C, best of five, on one core; `report` picks the cheapest passing run of each scheme (not the largest step: with sub-steps a larger step can be slower, BIRL-M in T-World took 15 ms per beat at dt 0.1 and 50 at 0.5), the speed-ups at both threshold sets, the measured against the predicted stability limits, the Table-S1 row and an error-vs-cost figure. `codegen` emits the chosen scheme for the target settled at Gate P. gotranx has no MATLAB backend: a MATLAB target is translated from the Julia output and stays *unverified* until its trace reproduces the generated stepper's biomarkers (`references/environment.md`). When the target is tissue or a GPU, read `references/tissue-and-backends.md` before handing back: the splitting, not the cell model, limits dt there, and a sub-step block that pays in one cell (the dyad) can cost at every step. If the session clock skipped the 100-beat run, `time` or `report`, go straight to `codegen` and name each skipped step in the hand-back (`bimgrl clock <model_dir>` lists them). Hand back the generated code, `report.md`, the frozen `blocks.toml`, `NOTES.md`, and a paragraph in the paper's style (which modes limited the step, which blocks removed them, the speed-up at matched accuracy).
 
 ## What you decide and what you do not
 

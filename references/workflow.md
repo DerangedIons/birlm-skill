@@ -32,11 +32,19 @@ sh <skill-dir>/scripts/env-check.sh <project-dir>
 uv run --directory <skill-dir> bimgrl setup [--skill-dir DIR]
 ```
 
-The preflight reports the installed tools and the project's language markers; `environment.md` says what to do when uv, Python or a C compiler is missing, and how a MATLAB source or target is handled.
+The preflight prints `clock_start` and reports the installed tools and the project's language markers; `environment.md` says what to do when uv, Python or a C compiler is missing, and how a MATLAB source or target is handled.
 
 **Gate P.** The output language of the stepper, asked of the user unless they named it or the project is unmistakably in one language. Recorded in NOTES.md under Source after intake.
 
 Installs gotranx from the spec in `config.toml` (or `GOTRANX_SRC=/path/to/clone`) into the skill's environment. The `block_rush_larsen` scheme, `suggest-blocks` and the symbolic Jacobian live in the DerangedIons fork until they are upstreamed, so this needs access to that repository or a local clone at the pinned commit. Nothing else in the skill works without it on the canonical path; the native path needs only numpy and scipy.
+
+## The session clock
+
+```
+bimgrl clock <model_dir> [--start | --start-at EPOCH] [--limit 3h]
+```
+
+One deadline for the whole run: 3 hours from the preflight (`--start-at <clock_start>`) to the generated code, gate waits included, kept in `bimgrl/clock.json` as a start time and a limit. Without that file nothing is limited. With it, every command ends with the `clock:` line (time used, time left, what has been cut), a sweep caps each run at the time left less a 15-minute tail reserve (a declined run is a `budget` row whose message starts with `clock:`, and it is run again by a later sweep that has the time), the stability bisection stops with the bracket it has, and `time` leaves unaffordable rows untimed. Below 75, 60, 45, 30 and 15 minutes left, the commands cut in turn the 100-beat sweep, `time` and `report`, `sweep --force`, every scheme but BIRL-M (or BIMGRL) with the bisection, and every sweep. `sweep`, `time` and `report` take `--ignore-clock`; `bimgrl clock <model_dir>` prints the ladder and every skipped step; `--limit` changes the limit of a running clock. The marks are the constants of `src/bimgrl/clock.py`.
 
 ## Phase 1: intake
 
@@ -158,4 +166,5 @@ Timing is serial, in C, best of N, one beat; it must run on an idle machine. The
 | codegen | `generated/` |
 | validate | `validation_<name>.md`, `validation_<name>.json` |
 | log | `../NOTES.md` |
+| clock | `clock.json` (start, limit, every command with its wall time, every skipped step) |
 | report | `report.md`, `report.json`, `error_vs_cost.png` |

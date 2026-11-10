@@ -126,7 +126,8 @@ class Runner:
             self._steppers[config.key] = CStepper(self.model.ode, config, self.build_dir, self.cc)
         return self._steppers[config.key]
 
-    def run_one(self, protocol: Protocol, label: str, dt: float, budget: float = 600.0, refined: str = "", force: bool = False) -> dict:
+    def run_one(self, protocol: Protocol, label: str, dt: float, budget: float = 600.0, refined: str = "", force: bool = False,
+                clock=None) -> dict:
         model = self.model
         row = dict(scheme=label, protocol=protocol.name, beats=protocol.beats, dt=dt, refined=refined, status="error", message="")
         start = time.perf_counter()
@@ -138,8 +139,16 @@ class Runner:
             row["config_key"] = config.key
             row["blocks_file"] = config.blocks_file or ""
             existing = self.store.get(self.store.key(row))
-            if existing is not None and existing["status"] not in ("error",) and not force:
+            # a run the session clock declined is not a result: it runs again when there is time
+            declined = existing is not None and (existing.get("message") or "").startswith("clock:")
+            if existing is not None and existing["status"] not in ("error",) and not declined and not force:
                 return existing
+            why = ""
+            if clock is not None and clock.allowance() < budget:
+                budget, why = clock.allowance(), "clock: "
+            if why and budget <= 0.0:
+                row.update(status="budget", message="clock: no session time left for a run")
+                return row
             stepper = self.stepper(config)
             p = model.parameters(protocol, stepper.parameters)
             # cost estimate from a short calibration, to respect the budget
@@ -148,7 +157,7 @@ class Runner:
             row["est_step_us"] = 1e6 * est_step
             n_total = round(protocol.t1 / dt)
             if est_step * n_total > budget:
-                row.update(status="budget", message=f"estimated {est_step * n_total:.0f} s > budget {budget:.0f} s", n_steps=n_total)
+                row.update(status="budget", message=f"{why}estimated {est_step * n_total:.0f} s > budget {budget:.0f} s", n_steps=n_total)
                 return row
             sim = simulate(stepper, protocol, dt, p)
             row["n_steps"] = sim["n_steps"]
@@ -211,7 +220,9 @@ def describe(row: dict) -> str:
 
 
 def sweep(ws: Workspace, labels=("RL", "BIRL-M"), protocol_name: str = "B", beats: int = 10, dts=None, budget: float = 600.0,
-          blocks_file=None, suggested_file=None, stability: bool = False, save_traces: bool = False, force: bool = False) -> list[dict]:
+          blocks_file=None, suggested_file=None, stability: bool = False, save_traces: bool = False, force: bool = False,
+          clock=None) -> list[dict]:
+    """`clock`, the session clock, caps every run at the session time left (less the tail reserve)"""
     runner = Runner(ws, blocks_file, suggested_file, save_traces)
     protocol = protocols(ws.meta, beats)[protocol_name]
     grid = sorted((dt for dt in (dts or DT_GRID) if allowed_dt(dt, protocol)), reverse=True)
@@ -222,7 +233,7 @@ def sweep(ws: Workspace, labels=("RL", "BIRL-M"), protocol_name: str = "B", beat
     for label in labels:
         streak = 0
         for dt in grid:
-            row = runner.run_one(protocol, label, dt, budget, force=force)
+            row = runner.run_one(protocol, label, dt, budget, force=force, clock=clock)
             rows.append(row)
             print(describe(row), flush=True)
             if row["status"] in ("budget", "n/a"):
@@ -232,11 +243,15 @@ def sweep(ws: Workspace, labels=("RL", "BIRL-M"), protocol_name: str = "B", beat
             if streak >= 2 and not dts:
                 break
         if stability and label in ("GRL", "RL", "FE"):
-            stability_limit(runner, protocol, label, [r for r in rows if r["scheme"] == label], budget)
+            stability_limit(runner, protocol, label, [r for r in rows if r["scheme"] == label], budget, clock)
     return rows
 
 
-def stability_limit(runner: Runner, protocol: Protocol, label: str, rows: list[dict], budget: float) -> float | None:
+class _OutOfBudget(Exception):
+    pass
+
+
+def stability_limit(runner: Runner, protocol: Protocol, label: str, rows: list[dict], budget: float, clock=None) -> float | None:
     """Bisect the largest stable time step of an explicit scheme between the largest ok and the
     smallest failing time step already run"""
     tested = sorted((r for r in rows if r["status"] in ("ok", "nan", "unphysical")), key=lambda r: float(r["dt"]))
@@ -249,11 +264,17 @@ def stability_limit(runner: Runner, protocol: Protocol, label: str, rows: list[d
     k_pass, k_fail = round(base / max(ok)), round(base / min(bad))
 
     def passes_k(k: int) -> bool:
-        row = runner.run_one(protocol, label, base / k, budget, refined="stability")
+        row = runner.run_one(protocol, label, base / k, budget, refined="stability", clock=clock)
         print(describe(row), flush=True)
+        if row["status"] == "budget":  # a run that was not made says nothing about stability
+            raise _OutOfBudget(row["message"])
         return row["status"] == "ok"
 
-    k = bisect_k(passes_k, k_pass, k_fail, lambda k: allowed_dt(base / k, protocol))
+    try:
+        k = bisect_k(passes_k, k_pass, k_fail, lambda k: allowed_dt(base / k, protocol))
+    except _OutOfBudget as e:
+        print(f"{label}: stability limit not bisected ({e}); it lies between {max(ok):g} ms (runs) and {min(bad):g} ms (fails)")
+        return None
     limit = base / k
     print(f"{label} stability limit: {limit:g} ms (largest allowed step that runs; {base / (k - 1) if k > 1 else float('nan'):g} ms fails)")
     out = runner.ws.out / "stability.json"
@@ -266,7 +287,8 @@ def stability_limit(runner: Runner, protocol: Protocol, label: str, rows: list[d
     return limit
 
 
-def time_rows(ws: Workspace, labels, protocol_name: str, beats_timed: int = 1, repeats: int = 5, blocks_file=None, max_one_beat_s: float = 120.0):
+def time_rows(ws: Workspace, labels, protocol_name: str, beats_timed: int = 1, repeats: int = 5, blocks_file=None, max_one_beat_s: float = 120.0,
+              clock=None):
     """Measure the time per beat of every ok row of the sweep, serially; writes runs.csv in place"""
     runner = Runner(ws, blocks_file)
     protocol = protocols(ws.meta, 10)[protocol_name]
@@ -278,6 +300,9 @@ def time_rows(ws: Workspace, labels, protocol_name: str, beats_timed: int = 1, r
             continue
         dt = float(row["dt"])
         est = float(row["est_step_us"]) * 1e-6 * round((protocol.period or protocol.t1) / dt)
+        if est <= max_one_beat_s and clock is not None and est * beats_timed * repeats > clock.allowance():
+            print(f"{row['scheme']} dt {dt:g}: not timed, the session clock has no time left for it")
+            continue
         if est > max_one_beat_s:
             row["time_per_beat_s"] = est
             print(f"{row['scheme']} dt {dt:g}: untimed, estimated {est:.1f} s per beat")

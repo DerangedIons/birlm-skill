@@ -94,7 +94,7 @@ print(f"{label} dt {dt:g}: {status}, {wall / beats:.3g} s per beat (python)")
 bimgrl validate <model_dir> --test <model_dir>/bimgrl/traces/BIRL-M_py_dt0.1.csv
 ```
 
-**Walk the grid by hand, in the sweep's order.** Coarsest first over 0.5, 0.2, 0.1, 0.05, 0.02, 0.01, 0.005 (only steps that divide the stimulus duration), one `validate` per step, and stop after two consecutive tight passes. A run whose status is `nan`, or that `validate` classes `unphysical`, is a stability failure; a run that is `ok` and fails a threshold is an accuracy failure. Quote the tables `validate` prints; the judgment at the gates is unchanged.
+**Walk the grid by hand, in the sweep's order.** Coarsest first over 0.5, 0.2, 0.1, 0.05, 0.02, 0.01, 0.005 (only steps that divide the stimulus duration), one `validate` per step, and stop after two consecutive tight passes. A run whose status is `nan`, or that `validate` classes `unphysical`, is a stability failure; a run that is `ok` and fails a threshold is an accuracy failure. Quote the tables `validate` prints; the judgment at the gates is unchanged. Nothing sizes these runs to the session clock, because the driver is not a `bimgrl` command: read the `clock:` line that ends each `validate` before starting the next step, estimate the step from the `wall_s_per_beat` of the previous one (halving the step doubles it), do not start a run that would cross the 15-minute mark, and apply the ladder of SKILL.md by hand (under 30 minutes, BIRL-M only).
 
 **What this path does not give you, and what to say instead.**
 

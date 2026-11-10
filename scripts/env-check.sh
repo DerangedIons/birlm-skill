@@ -22,6 +22,10 @@ tool() { # name, role, version command...
     fi
 }
 
+# the session clock starts here: pass this to `bimgrl clock <model_dir> --start-at`
+echo "clock_start=$(date +%s)"
+echo
+
 echo "## Tools"
 echo
 echo "| tool | found | needed for |"

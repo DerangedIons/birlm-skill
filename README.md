@@ -56,7 +56,7 @@ agents/openai.yaml       Codex metadata
 config.toml              where gotranx is installed from
 pyproject.toml           the Python package (src/bimgrl) and its dependencies
 src/bimgrl/              the commands; vendored/ holds the survey's biomarker, metric and stiffness code with provenance
-scripts/env-check.sh     preflight: installed tools and the project's language markers (POSIX sh, needs no Python)
+scripts/env-check.sh     preflight: session clock start, installed tools and the project's language markers (POSIX sh, needs no Python)
 scripts/jl/              Julia helpers: adapter (ForwardDiff Jacobian over JSON lines), Rodas5P reference, sparsity
 references/              workflow, environment and output language, block rules, implementing blocks by hand, contracts, invariants, translation, thresholds, notes template
 assets/                  templates for meta.toml and blocks.toml
