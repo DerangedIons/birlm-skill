@@ -58,6 +58,8 @@ Two files from the user's own implementation, untouched by the translation:
 
 `params.json`: every parameter the original code uses, by original name, with its value.
 
+For a MATLAB model the agent writes the export script around the user's RHS function and runs it by the ladder of `environment.md` (`matlab -batch`, else Octave, else one line the user pastes into MATLAB).
+
 Optionally a trace of the original code in the trace contract (`contracts.md`), with its run meta saying which solver produced it.
 
 ## `bimgrl fidelity`

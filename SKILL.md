@@ -18,6 +18,20 @@ Rush-Larsen schemes advance every state alone. Plain Rush-Larsen (RL) is exact-e
 
 This skill turns the paper's workflow into scripts. The scripts do every measurement; you do the judgment at the gates marked below, and you never type a number the scripts can produce.
 
+## Preflight (every run, before anything else)
+
+```
+sh <skill-dir>/scripts/env-check.sh <project-dir>
+```
+
+It prints what is installed (uv, Python, a C compiler, Julia, MATLAB, Octave, the skill's environment) and which language the project directory is written in. Do not assume a toolchain: read the table, then apply `references/environment.md`. In short:
+
+- **The analysis always runs in Python**, here, whatever language the model or the stepper is in. No uv: ask the user for permission to install it (user space, it brings its own Python), then Setup. If that is refused or fails, stop and show what is missing; never port the scripts or estimate their output.
+- **No C compiler**: everything up to `propose` runs as written; the sweeps go through a gotranx-generated Python stepper and `bimgrl validate` instead of `sweep` and `time`.
+- **A language the agent cannot execute** (MATLAB without a licence on this machine) costs one file handoff at each end, not the pipeline: try `matlab -batch`, then Octave, then give the user one line to run.
+
+**Gate P** (always): the output language of the stepper. Use it without asking only if the user named it, or the project carries the markers of exactly one language and the model is in that language. Otherwise ask, offering what gotranx generates (C, C++, CUDA, Python, Julia, CytoZoo) and MATLAB, installed languages first. The answer changes only the final `codegen` and its check, never the analysis.
+
 ## Setup (once per machine)
 
 ```
@@ -26,7 +40,7 @@ uv venv .venv && uv pip install --python .venv/bin/python -e .
 uv run --directory <skill-dir> bimgrl setup      # gotranx from config.toml, feat/block-rush-larsen @ e30efec or later (or GOTRANX_SRC=/path/to/clone)
 ```
 
-`<skill-dir>` is the directory of this file. Every command below is `uv run --directory <skill-dir> bimgrl <command> <model_dir> [flags]`; `<model_dir>` holds `model.ode`, `meta.toml`, `blocks.toml`, `NOTES.md`, and the outputs under `<model_dir>/bimgrl/`. A C compiler is needed for the sweep (`CC`, else gcc); Julia 1.10+ only for the Julia on-ramp (`scripts/jl`).
+`<skill-dir>` is the directory of this file. Every command below is `uv run --directory <skill-dir> bimgrl <command> <model_dir> [flags]` with `<model_dir>` as an absolute path (`--directory` moves the working directory to the skill); `<model_dir>` holds `model.ode`, `meta.toml`, `blocks.toml`, `NOTES.md`, and the outputs under `<model_dir>/bimgrl/`. A C compiler (`CC`, else gcc) is used by `sweep` and `time`; without one, take the generated-stepper path of `references/environment.md`. Julia 1.10+ is needed only for the Julia on-ramp (`scripts/jl`).
 
 ## The two paths
 
@@ -89,7 +103,7 @@ Eigenmodes and participation factors at the paper's 13 checkpoints plus every 1 
 bimgrl sweep <model_dir> --scheme RL --stability          # GRL path: --scheme GRL
 ```
 
-The baseline from the coarsest allowed step down, with the stability limit bisected, biomarkers against the reference, the physical-range check, and the drift of every invariant per beat. Three things to read off: the measured limit against the phase-4 prediction (RL+FE P1 for RL, GRL P1/P2 for GRL; agreement within a factor of ~1.5 confirms the mode diagnosis); a run that is `ok` but carries a `DRIFT` flag (a chain or a Ca total leaking), which is the "runs but gives the wrong answer" case that needs an implicit block even if nothing crashes; and the step at which the baseline meets the moderate thresholds, the number BIRL-M has to beat.
+The baseline from the coarsest allowed step down, with the stability limit bisected, biomarkers against the reference, the physical-range check, and the drift of every invariant per beat. Three things to read off: the measured limit against the phase-4 prediction (RL+FE P1 for RL, GRL P1/P2 for GRL; agreement within a factor of ~1.5 confirms the mode diagnosis); a run that is `ok` but carries a `DRIFT` flag (a chain or a Ca total leaking), which is the "runs but gives the wrong answer" case that needs an implicit block even if nothing crashes; and the step at which the baseline meets the moderate thresholds, the number BIRL-M has to beat. Without a C compiler, this phase and phases 7 to 9 run each scheme as a generated Python stepper through `validate` (`references/environment.md`): the same metrics, a bracket instead of the bisected limit, and no `report`.
 
 ### 6. Propose blocks
 
@@ -129,7 +143,7 @@ bimgrl report <model_dir>                          # GRL path: --baseline GRL (c
 bimgrl codegen <model_dir> --backend c|cpp|cuda|python|julia|cytozoo --scheme BIRL-M
 ```
 
-The 100-beat run confirms the configuration chosen at beat 10 still holds (in the survey, 33 of 39 models kept the moderate thresholds over 100 beats with BIRL-M and 28 with RL, the failures just above a threshold). `time` measures the cost per beat in C, best of five, on one core; `report` picks the cheapest passing run of each scheme (not the largest step: with sub-steps a larger step can be slower, BIRL-M in T-World took 15 ms per beat at dt 0.1 and 50 at 0.5), the speed-ups at both threshold sets, the measured against the predicted stability limits, the Table-S1 row and an error-vs-cost figure. `codegen` emits the chosen scheme for the user's target. When the target is tissue or a GPU, read `references/tissue-and-backends.md` before handing back: the splitting, not the cell model, limits dt there, and a sub-step block that pays in one cell (the dyad) can cost at every step. Hand back `report.md`, the frozen `blocks.toml`, `NOTES.md`, and a paragraph in the paper's style (which modes limited the step, which blocks removed them, the speed-up at matched accuracy).
+The 100-beat run confirms the configuration chosen at beat 10 still holds (in the survey, 33 of 39 models kept the moderate thresholds over 100 beats with BIRL-M and 28 with RL, the failures just above a threshold). `time` measures the cost per beat in C, best of five, on one core; `report` picks the cheapest passing run of each scheme (not the largest step: with sub-steps a larger step can be slower, BIRL-M in T-World took 15 ms per beat at dt 0.1 and 50 at 0.5), the speed-ups at both threshold sets, the measured against the predicted stability limits, the Table-S1 row and an error-vs-cost figure. `codegen` emits the chosen scheme for the target settled at Gate P. gotranx has no MATLAB backend: a MATLAB target is translated from the Julia output and stays *unverified* until its trace reproduces the generated stepper's biomarkers (`references/environment.md`). When the target is tissue or a GPU, read `references/tissue-and-backends.md` before handing back: the splitting, not the cell model, limits dt there, and a sub-step block that pays in one cell (the dyad) can cost at every step. Hand back `report.md`, the frozen `blocks.toml`, `NOTES.md`, and a paragraph in the paper's style (which modes limited the step, which blocks removed them, the speed-up at matched accuracy).
 
 ## What you decide and what you do not
 
@@ -139,6 +153,7 @@ You decide: compartment naming, whether a flagged conservation law is a model bu
 
 | File | Load when |
 |---|---|
+| `references/environment.md` | at the preflight and Gate P: a missing uv, Python or C compiler, choosing the output language, a MATLAB source or target |
 | `references/workflow.md` | the full procedure with every flag and output, and the native-path variant |
 | `references/block-rules.md` | at Gate 6 and in tuning: the rules of each base, the blocks.toml schema, what each knob trades off |
 | `references/invariants.md` | at Gate 2: how to read the classes, weights, flags and the drift monitor |

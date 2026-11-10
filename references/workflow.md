@@ -25,11 +25,16 @@ The pipeline below is this list made deterministic, with the invariant check pro
 
 **Native path.** The model must stay in its own code (a hand-optimised Julia integrator, a legacy C model). The analysis phases run through an RHS adapter (`contracts.md`), the agent implements the blocks in the user's integrator by the recipe in `implementing-blocks.md`, and validation goes through the trace contract with `bimgrl validate`. There is no `propose`, `codegen` or `sweep` on this path; the block rules in `block-rules.md` are applied by hand.
 
-## Phase 0: setup
+## Phase 0: preflight and setup
 
 ```
+sh <skill-dir>/scripts/env-check.sh <project-dir>
 uv run --directory <skill-dir> bimgrl setup [--skill-dir DIR]
 ```
+
+The preflight reports the installed tools and the project's language markers; `environment.md` says what to do when uv, Python or a C compiler is missing, and how a MATLAB source or target is handled.
+
+**Gate P.** The output language of the stepper, asked of the user unless they named it or the project is unmistakably in one language. Recorded in NOTES.md under Source after intake.
 
 Installs gotranx from the spec in `config.toml` (or `GOTRANX_SRC=/path/to/clone`) into the skill's environment. The `block_rush_larsen` scheme, `suggest-blocks` and the symbolic Jacobian live in the DerangedIons fork until they are upstreamed, so this needs access to that repository or a local clone at the pinned commit. Nothing else in the skill works without it on the canonical path; the native path needs only numpy and scipy.
 

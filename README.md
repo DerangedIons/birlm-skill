@@ -22,7 +22,7 @@ uv run bimgrl setup                      # gotranx from config.toml (or GOTRANX_
 ln -s ~/dev/birlm-skill ~/dotfiles/llm/skills/birlm     # the folder both Claude Code and Codex read
 ```
 
-The skill is `birlm`; its command-line tool keeps the name `bimgrl`. `bimgrl setup` installs gotranx from the spec in `config.toml`. The `block_rush_larsen` scheme, `suggest-blocks` and the symbolic Jacobian live in the DerangedIons fork until they are upstreamed, so this needs access to that repository or a local clone at the pinned commit (`feat/block-rush-larsen` at `e30efec` or later, the first with `base_scheme` and `freeze_boundary_fluxes`). A C compiler (`gcc`, or `CC`) is needed for the sweep. The Julia helpers under `scripts/jl/` need Julia 1.10 or later and instantiate their own project on first use.
+The skill is `birlm`; its command-line tool keeps the name `bimgrl`. `bimgrl setup` installs gotranx from the spec in `config.toml`. The `block_rush_larsen` scheme, `suggest-blocks` and the symbolic Jacobian live in the DerangedIons fork until they are upstreamed, so this needs access to that repository or a local clone at the pinned commit (`feat/block-rush-larsen` at `e30efec` or later, the first with `base_scheme` and `freeze_boundary_fluxes`). A C compiler (`gcc`, or `CC`) is used by the sweep; without one the agent sweeps a generated Python stepper instead. `sh scripts/env-check.sh` reports what a machine has, and `references/environment.md` covers every missing piece, the choice of output language and MATLAB models. The Julia helpers under `scripts/jl/` need Julia 1.10 or later and instantiate their own project on first use.
 
 ## Commands, in pipeline order
 
@@ -56,8 +56,9 @@ agents/openai.yaml       Codex metadata
 config.toml              where gotranx is installed from
 pyproject.toml           the Python package (src/bimgrl) and its dependencies
 src/bimgrl/              the commands; vendored/ holds the survey's biomarker, metric and stiffness code with provenance
+scripts/env-check.sh     preflight: installed tools and the project's language markers (POSIX sh, needs no Python)
 scripts/jl/              Julia helpers: adapter (ForwardDiff Jacobian over JSON lines), Rodas5P reference, sparsity
-references/              workflow, block rules, implementing blocks by hand, contracts, invariants, translation, thresholds, notes template
+references/              workflow, environment and output language, block rules, implementing blocks by hand, contracts, invariants, translation, thresholds, notes template
 assets/                  templates for meta.toml and blocks.toml
 evals/                   prompts and fixtures for testing the skill
 ```
