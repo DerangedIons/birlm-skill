@@ -55,9 +55,9 @@ gotranx's tests cover the generated CUDA and C++ code, but it has not been run o
 Nothing in the scheme is specific to the heart; what carries over depends on the model.
 
 - **Models with Hodgkin–Huxley gates** (neurons, other excitable cells) fit the RL base directly: the gates go in `stiff_states`, and the membrane potential with its fast gates makes a V block (point `suggest-blocks` at it with `--membrane-potential`).
-- **Models without gates** (chemical kinetics, signalling, pharmacology): RL is plain forward Euler, so the blocks do all the work. Put each stiff, linearly coupled group in an implicit block, and sub-step a fast transient with a `value_triggers` entry on the flux that drives it. `suggest-blocks` finds no V block in a model without a membrane potential, which is fine.
+- **Models without gates** (chemical kinetics, signalling, pharmacology): RL is plain forward Euler, so the blocks do all the work. `propose` does the first part by its generic rule: each stiff mode on forward Euler becomes an implicit block of its owners. Sub-step a fast transient by hand, with a `value_triggers` entry on the flux that drives it. `suggest-blocks` finds no V block in a model without a membrane potential, which is fine.
 - **Check the assumption of the implicit solve**: column diagonal dominance of $I - hJ$ (pools, buffers, chains; `block-rules.md`). For another kind of block, check against the reference.
-- **The biomarkers are cardiac** (stimulus protocols, action-potential biomarkers). For another model, write the reference and the error measure for what matters in it before choosing blocks.
+- **The biomarkers are cardiac** (stimulus protocols, action-potential biomarkers), and `intake`, the protocols and the sweeps need a membrane potential. A model without one (a non-excitable cell) can have its stiffness analysed and its blocks proposed, but not yet validated by `sweep`: write the reference and the error measure for what matters in it first.
 
 ## Limitations
 

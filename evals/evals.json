@@ -24,6 +24,12 @@
       "prompt": "My model is a hand-optimised Julia f(du,u,p,t) that I cannot translate. What can you still do to find its stiff modes and whether GRL would conserve its chains, and how would I validate a hand-written block scheme?",
       "expected_output": "Describes the native path: the JSON-lines adapter served by scripts/jl/adapter.jl with ForwardDiff, a trace from the user's code for checkpoints, bimgrl stiffness --adapter and invariants --adapter, implementing blocks per references/implementing-blocks.md, and validation through the trace contract with bimgrl validate against a Rodas5P reference from scripts/jl/reference.jl.",
       "files": []
+    },
+    {
+      "id": "matlab-no-compiler",
+      "prompt": "My cell model is a MATLAB function dydt = rhs(t, y, p) in ~/models/mycell (just .m files, nothing else). This laptop has MATLAB but no gcc, and you can't launch MATLAB from the terminal here. I want a faster fixed-step stepper I can call from my MATLAB scripts.",
+      "expected_output": "Runs scripts/env-check.sh before anything else and reads its tables; keeps the analysis in Python (provisions with uv after asking, does not port the scripts to MATLAB); treats MATLAB as the target because the user named it (no Gate P question) and records it in NOTES.md; translates the model to .ode and gets rhs_samples.csv and params.json through a handoff export script with the one line to run in MATLAB, then fidelity; because there is no C compiler, sweeps generated Python steppers through bimgrl validate, reports the stability limit as a bracket and labels the cost as Python; translates the frozen stepper from the Julia codegen to .m, hands off a trace driver, and calls the stepper unverified until the trace's biomarker values match the generated stepper's to round-off.",
+      "files": []
     }
   ]
 }

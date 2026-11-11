@@ -2,11 +2,23 @@
 each block with the finding that produced it; then compare with gotranx's own ``suggest-blocks``
 and list the judgment calls
 
+The principle, whatever the model: a state takes a large step safely only if something covers
+it, the base's exponential update, an implicit block or a sub-step block. Every other state is
+advanced by forward Euler, which limits the step to 2|Re λ|/|λ|² of the stiffest mode it owns. The
+structures named below (a Ca pool with its buffers, a Markov chain, V with its fast gates) are the
+common instances in cardiac models, and the reason to group states so that an invariant stays
+exact; they are not the list of what may be blocked. The generic rule covers what they leave, and
+``propose.md`` shows, mode by mode, what covers each stiff mode and the step limit that remains.
+
 Two rule sets, one per base scheme of ``block_rush_larsen``.
 
 RL base (``--base rl``, the default; BIRL-M of the blocked-rush-larsen survey). The base
 updates only the Hodgkin-Huxley gates exponentially and every other state by forward Euler, so
 every non-gate state with a fast mode needs a block:
+0. Generic rule, applied after the structural ones: every stiff mode owned by states that are
+   still on forward Euler (V excepted, which the V block covers) gets an implicit block of those
+   owners, with the whole chain or binding cluster of any member; owners that share a mode share
+   a block, and an owner that shares a mode with an existing implicit block joins it.
 1. Markov chains: as rule 1 of the GRL base.
 2. One calcium block: every Ca-carrying state (the confirmed Ca pools, the total-Ca networks
    through them, their binding clusters) in one implicit block, merged with every implicit
@@ -21,7 +33,8 @@ The file carries ``base_scheme = "rush_larsen"``, the gates as ``stiff_states`` 
 GRL base (``--base grl``; BIMGRL, the paper's "Choice of blocks"):
 1. Every Markov chain of an ion channel or of the release channel (a closed or exactly
    conserving chain that feeds V, or that the compartments name as the release channel) is an
-   implicit block. A chain that does not feed V (contraction) is listed, not blocked.
+   implicit block. A chain that does not feed V is listed, not blocked (under the RL base the
+   generic rule blocks it when it owns a stiff mode).
 2. Every binding cluster (a Ca pool with its buffer states) that owns a stiff mode is an
    implicit block; the non-stiff ones (cytosolic TnC, CaM) stay explicit.
 3. The SR and the junctional pool, coupled by release, share one block, so that the release
@@ -74,7 +87,18 @@ def propose(ws: Workspace, dt: float = 0.1, stiff_threshold: float = -20.0, nest
                 for n in m["owners"]:
                     stiff_owners[n] = min(stiff_owners.get(n, 0.0), m["min_lam_re"])
 
+    if base == "rl":
+        from .stepper import ws_gates
+
+        gates = list(meta.rl_gates or ws_gates(ws.model))
+        explicit = {s["name"] for s in structure["states"]} - set(gates)
+    else:
+        gates = []
+        explicit = {s["name"] for s in structure["states"] if s["update_grl"] == "FE"}
+    modes = [m for m in stiff["modes"] if m["min_lam_re"] <= stiff_threshold] if stiff else []
+
     implicit: list[dict] = []
+    other_chains: list[list[str]] = []
     notes: list[str] = []
     judgment: list[str] = []
     release = set(comps.release_channel)
@@ -89,7 +113,7 @@ def propose(ws: Workspace, dt: float = 0.1, stiff_threshold: float = -20.0, nest
             continue
         is_channel = bool(set(members) & feeds_v) or bool(set(members) & release)
         if not is_channel:
-            notes.append(f"chain {', '.join(members)} does not feed V (contraction?): left explicit")
+            other_chains.append(members)
             continue
         implicit.append(dict(states=members, why=f"Markov chain ({g['class']}); rule 1"))
 
@@ -178,6 +202,20 @@ def propose(ws: Workspace, dt: float = 0.1, stiff_threshold: float = -20.0, nest
     else:
         notes.append("no junctional/dyadic pool: no dyad block (as for models whose Ca enters the cytosol directly)")
 
+    # 0. generic rule (RL base): whatever stiff mode the structural rules left on forward Euler
+    if base == "rl":
+        if stiff:
+            _generic_blocks(implicit, substep, modes, explicit, inv, v, judgment)
+        else:
+            judgment.append(f"no {stiff_file}: the generic rule did not run, so a stiff state outside the chains and the calcium block "
+                            "would stay on forward Euler unnoticed; run `bimgrl stiffness` first")
+    blocked = set().union(*(b["states"] for b in implicit))
+    for members in other_chains:
+        if not set(members) & blocked:
+            reason = "does not feed V" if base == "grl" else (
+                "does not feed V and owns no stiff mode on forward Euler" if stiff else "does not feed V, and there is no stiffness file to judge it")
+            notes.append(f"chain {', '.join(members)} {reason}: left explicit")
+
     # 6. nesting: an implicit block that shares states with a sub-step block goes inside it
     for b in implicit:
         for s in substep:
@@ -185,17 +223,28 @@ def propose(ws: Workspace, dt: float = 0.1, stiff_threshold: float = -20.0, nest
             if shared and not set(b["states"]) <= set(s["states"]):
                 s["states"] += [x for x in b["states"] if x not in s["states"]]
                 s["why"] += f"; absorbed the implicit block {', '.join(b['states'])} (rule 6)"
+    vblock = next((s for s in substep if s["mode"] == "proportional" and v in s["states"]), None)
     if nest_v_markov:
-        vblock = next((s for s in substep if s["mode"] == "proportional"), None)
         if vblock:
             for b in implicit:
                 if set(b["states"]) & feeds_v and not set(b["states"]) <= set(vblock["states"]):
                     vblock["states"] += b["states"]
                     vblock["why"] += f"; nested the voltage-dependent chain {', '.join(b['states'])}"
-    else:
-        for b in implicit:
-            if "Markov" in b["why"] and set(b["states"]) & feeds_v and not any(set(b["states"]) <= set(s["states"]) for s in substep):
-                judgment.append(f"the voltage-dependent chain {', '.join(b['states'])} is an implicit block outside the V block; nest it (--nest-v-markov) if its states go negative at large steps (Winslow 1999 L-type)")
+    nesting = _nesting_candidates(stiff, stiff_threshold, v, vblock, feeds_v, implicit)
+
+    # what covers each stiff mode, and the forward Euler limit the blocks leave
+    coverage, residual = _coverage(modes, implicit, substep, explicit)
+    if base == "rl":
+        for r in coverage:
+            if r["uncovered_share"] < 0.5:
+                continue
+            line = (f"the stiff mode of {', '.join(r['owners'])} (Re λ {r['lam_re']:.4g} /ms, forward Euler limit {r['fe_limit_ms']:.3g} ms) is still "
+                    f"mostly on forward Euler after these blocks, through {', '.join(r['uncovered'])}")
+            if v in r["uncovered"]:
+                line += f". {v} is covered only by a V sub-step block: name the fast gates that act on it in meta.toml [compartments].na_gates"
+            else:
+                line += ". No single state owns enough of it for the generic rule; put the listed states in one implicit block if the sweep stops at this limit"
+            judgment.append(line)
 
     # gotranx's own suggestion for comparison
     suggested, suggest_msg = None, ""
@@ -240,10 +289,8 @@ def propose(ws: Workspace, dt: float = 0.1, stiff_threshold: float = -20.0, nest
 
     stiff_states = None
     if base == "rl":
-        from .stepper import ws_gates
-
         in_implicit = set().union(*(set(b["states"]) for b in implicit))
-        stiff_states = [g for g in (meta.rl_gates or ws_gates(ws.model)) if g not in in_implicit]
+        stiff_states = [g for g in gates if g not in in_implicit]
     toml = render_toml(implicit, substep, meta.id, round_=1, base=base, stiff_states=stiff_states)
     # validate
     try:
@@ -257,8 +304,131 @@ def propose(ws: Workspace, dt: float = 0.1, stiff_threshold: float = -20.0, nest
         judgment.append(valid)
 
     result = dict(base=base, stiff_states=stiff_states, implicit=implicit, substep=substep, notes=notes, judgment=judgment, valid=valid, toml=toml, dt=dt,
+                  coverage=coverage, residual=residual, nesting=nesting, have_stiffness=stiff is not None,
                   suggested=_describe_detection(suggested) if suggested else None, suggest_msg=suggest_msg)
     return result
+
+
+def _generic_blocks(implicit: list[dict], substep: list[dict], modes: list[dict], explicit: set, inv: dict, v: str, judgment: list[str]) -> None:
+    """The generic rule of the RL base. A stiff mode whose owners are still on forward Euler limits
+    the step whatever the states are called, so those owners get an implicit block. Owners that share
+    a mode share a block, because the fast mode belongs to the group; the chain or binding cluster of
+    a member comes whole, so that its sum stays exact; and an owner that shares a mode with an
+    existing implicit block joins that block. V is left to the V sub-step block"""
+    covered = set().union(*(b["states"] for b in implicit), *(s["states"] for s in substep))
+    groups: list[dict] = []
+    for m in modes:
+        own = [n for n in m["owners"] if n in explicit and n not in covered and n != v]
+        if not own:
+            continue
+        hit = [g for g in groups if set(g["states"]) & set(own)]
+        g = dict(states=[], modes=[])
+        for h in hit:
+            g["states"] += [n for n in h["states"] if n not in g["states"]]
+            g["modes"] += h["modes"]
+        g["states"] += [n for n in own if n not in g["states"]]
+        g["modes"].append(m)
+        groups = [x for x in groups if not any(x is h for h in hit)] + [g]
+
+    subgroups = [s for s in inv["invariants"] if s["level"] == "subgroup" and s["structure"] in ("markov", "binding")]
+    for g in groups:
+        whole, structured = [], set()
+        for s in subgroups:
+            if not set(s["members"]) & set(g["states"]):
+                continue
+            kind = "chain" if s["structure"] == "markov" else "binding cluster"
+            if s["class"] == "improper":
+                judgment.append(f"the {kind} {', '.join(s['members'])} has a stiff state but is flagged as not conserving (see invariants.md): "
+                                "only the stiff state was blocked; fix the model before blocking the rest")
+                continue
+            g["states"] += [n for n in s["members"] if n not in g["states"] and n != v]
+            structured |= set(s["members"])
+            whole.append(f"the whole {kind} {', '.join(s['members'])} ({s['class']}), so that its sum stays exact")
+        top = min(g["modes"], key=lambda m: m["min_lam_re"])
+        desc = (f"stiff mode Re λ {top['min_lam_re']:.4g} /ms at t = {top['t_at_min']:g} ms (forward Euler limit {1e3 * top['fe_limit_ms']:.3g} µs), "
+                f"owned by {', '.join(f'{n} {p:.2f}' for n, p in top['mean_participation'].items())}")
+        if whole:
+            desc += "; with " + "; ".join(whole)
+        linked = set(g["states"]) | {n for m in g["modes"] for n in m["owners"]}
+        targets = [b for b in implicit if set(b["states"]) & linked]
+        in_implicit = set().union(*(b["states"] for b in implicit))
+        new = [n for n in g["states"] if n not in in_implicit]
+        if not new:
+            continue
+        if targets:
+            targets[0]["states"] += new
+            targets[0]["why"] += f"; joined by {', '.join(new)}, which shares a fast mode with this block ({desc}; generic rule)"
+            if len(targets) > 1:
+                judgment.append(f"{', '.join(new)} shares a fast mode with {len(targets)} implicit blocks and joined the first; "
+                                "merge the blocks if the sweep shows an error at their boundary")
+        else:
+            caveat = "" if set(new) <= structured else (
+                ". Not a pool with its buffers or a chain, so the implicit solve is not guaranteed stable: check against the reference")
+            implicit.append(dict(states=new, generic=True, why=(
+                f"{desc}; these states are not gates, so the RL base steps them by forward Euler (generic rule)" + caveat)))
+
+
+def _coverage(modes: list[dict], implicit: list[dict], substep: list[dict], explicit: set) -> tuple[list[dict], dict | None]:
+    """For each stiff mode, what advances each owner once the blocks are in place, and the share of
+    the mode left on forward Euler. The share is an upper bound: it sums each state's largest
+    participation over the checkpoints. The mode with at least half on forward Euler and the smallest
+    limit is the step limit the blocks leave (the P1 of `stiffness`, after the blocks)"""
+    where: dict[str, str] = {}
+    for i, b in enumerate(implicit, 1):
+        for n in b["states"]:
+            where[n] = f"implicit block {i}"
+    for s in substep:
+        for n in s["states"]:
+            where[n] = f"sub-step block ({s['mode']})"
+
+    def how(n):
+        return where.get(n) or ("forward Euler" if n in explicit else "exponential (base)")
+
+    rows = []
+    for m in modes:
+        part = m.get("max_participation") or m["mean_participation"]
+        left = {n: x for n, x in part.items() if how(n) == "forward Euler"}
+        rows.append(dict(owners=m["owners"], lam_re=m["min_lam_re"], fe_limit_ms=m["fe_limit_ms"], t=m["t_at_min"],
+                         cover={n: how(n) for n in m["owners"]}, uncovered_share=min(1.0, sum(left.values())),
+                         uncovered=sorted(left, key=left.get, reverse=True)))
+    limiting = [r for r in rows if r["uncovered_share"] >= 0.5]
+    return rows, (min(limiting, key=lambda r: r["fe_limit_ms"]) if limiting else None)
+
+
+def _nesting_candidates(stiff: dict | None, threshold: float, v: str, vblock: dict | None, feeds_v: set, implicit: list[dict]) -> list[dict]:
+    """States outside the V block that the upstroke may under-resolve: they share a fast mode with V,
+    or they act on V and are fast only at the checkpoints where V is. Evidence for the user, not a
+    rule: nothing is nested unless a sweep shows the state limiting the step or leaving its range"""
+    if not stiff or vblock is None:
+        return []
+    inside = set(vblock["states"])
+    v_times: set[float] = set()
+    shared: dict[str, float] = {}
+    seen: dict[str, list[tuple[float, float]]] = {}
+    for e in stiff["checkpoints"]:
+        for m in e["modes"]:
+            if m["lam_re"] > threshold:
+                continue
+            own = [n for n, _ in m["owners"]]
+            if v in own:
+                v_times.add(e["t"])
+                for n in own:
+                    if n not in inside:
+                        shared[n] = min(shared.get(n, 0.0), m["lam_re"])
+            for n in own:
+                seen.setdefault(n, []).append((e["t"], m["lam_re"]))
+    found = {n: f"shares a fast mode with {v} (Re λ {lam:.4g} /ms)" for n, lam in shared.items()}
+    for n, hits in seen.items():
+        ts = {t for t, _ in hits}
+        if n in inside or n in found or n not in feeds_v or not v_times or not ts <= v_times:
+            continue
+        found[n] = f"acts on {v} and is fast only while {v} is (t = {min(ts):g} to {max(ts):g} ms, Re λ {min(lam for _, lam in hits):.4g} /ms)"
+    out: list[dict] = []
+    for n, why in found.items():
+        block = next((b["states"] for b in implicit if n in b["states"]), [n])
+        if not any(c["states"] == block for c in out):
+            out.append(dict(states=block, why=why if block == [n] else f"{n} {why}; it sits in an implicit block, which nests whole"))
+    return out
 
 
 def _describe_detection(det) -> dict:
@@ -345,6 +515,27 @@ def to_markdown(r: dict) -> str:
         out += [f"Stiff states (exponential under the base): {', '.join(r['stiff_states']) or 'none'}", ""]
     out += ["## Implicit blocks", ""] + ([f"- {', '.join(b['states'])}: {b['why']}" for b in r["implicit"]] or ["- none"])
     out += ["", "## Sub-step blocks", ""] + ([f"- {', '.join(s['states'])} ({s['mode']}, h_min {s['h_min']}, triggers {s['rate_triggers']}): {s['why']}" for s in r["substep"]] or ["- none"])
+    out += ["", "## Stiff modes and what covers them", ""]
+    if not r.get("have_stiffness"):
+        out.append("No stiffness file: run `bimgrl stiffness` first. Without it nothing here says what the blocks leave on forward Euler.")
+    elif not r["coverage"]:
+        out.append("No stiff mode at this threshold.")
+    else:
+        out.append("A state takes a large step safely only if something covers it: the base's exponential update, an implicit block or a sub-step "
+                   "block. A mode left mostly on forward Euler limits the step to the value in its row.")
+        out += ["", md_table(
+            ["owners", "min Re λ (/ms)", "FE limit (ms)", "t at min (ms)", "what advances each owner", "share left on forward Euler (upper bound)"],
+            [[", ".join(c["owners"]), c["lam_re"], c["fe_limit_ms"], c["t"], "; ".join(f"{n}: {h}" for n, h in c["cover"].items()),
+              f"{c['uncovered_share']:.2f}" + (" UNCOVERED" if c["uncovered_share"] >= 0.5 else "")] for c in r["coverage"]])]
+        res = r["residual"]
+        out += ["", "Predicted forward Euler step limit with these blocks: " + (
+            f"{res['fe_limit_ms']:.4g} ms, from the mode of {', '.join(res['owners'])} (still on forward Euler: {', '.join(res['uncovered'])})."
+            if res else "none; no stiff mode is left mostly on forward Euler.")]
+    out += ["", "## Nesting candidates (not applied)", ""]
+    out += [f"- {', '.join(c['states'])}: {c['why']}" for c in r.get("nesting", [])] or ["- none"]
+    if r.get("nesting"):
+        out += ["", "Nest one in the V block only when a sweep shows it limiting the step or leaving its range: every nested state is solved again "
+                "on each sub-step. `--nest-v-markov` nests every implicit block that acts on V."]
     out += ["", "## Left explicit (by rule)", ""] + ([f"- {n}" for n in r["notes"]] or ["- nothing"])
     out += ["", "## Judgment calls for the user", ""] + ([f"- {j}".replace("\n", "\n  ") for j in r["judgment"]] or ["- none"])
     out += ["", f"## gotranx suggest-blocks at dt {r['dt']:g}, for comparison", ""]

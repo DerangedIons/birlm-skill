@@ -25,13 +25,26 @@ The pipeline below is this list made deterministic, with the invariant check pro
 
 **Native path.** The model must stay in its own code (a hand-optimised Julia integrator, a legacy C model). The analysis phases run through an RHS adapter (`contracts.md`), the agent implements the blocks in the user's integrator by the recipe in `implementing-blocks.md`, and validation goes through the trace contract with `bimgrl validate`. There is no `propose`, `codegen` or `sweep` on this path; the block rules in `block-rules.md` are applied by hand.
 
-## Phase 0: setup
+## Phase 0: preflight and setup
 
 ```
+sh <skill-dir>/scripts/env-check.sh <project-dir>
 uv run --directory <skill-dir> bimgrl setup [--skill-dir DIR]
 ```
 
+The preflight prints `clock_start` and reports the installed tools and the project's language markers; `environment.md` says what to do when uv, Python or a C compiler is missing, and how a MATLAB source or target is handled.
+
+**Gate P.** The output language of the stepper, asked of the user unless they named it or the project is unmistakably in one language. Recorded in NOTES.md under Source after intake.
+
 Installs gotranx from the spec in `config.toml` (or `GOTRANX_SRC=/path/to/clone`) into the skill's environment. The `block_rush_larsen` scheme, `suggest-blocks` and the symbolic Jacobian live in the DerangedIons fork until they are upstreamed, so this needs access to that repository or a local clone at the pinned commit. Nothing else in the skill works without it on the canonical path; the native path needs only numpy and scipy.
+
+## The session clock
+
+```
+bimgrl clock <model_dir> [--start | --start-at EPOCH] [--limit 3h]
+```
+
+One deadline for the whole run: 3 hours from the preflight (`--start-at <clock_start>`) to the generated code, gate waits included, kept in `bimgrl/clock.json` as a start time and a limit. Without that file nothing is limited. With it, every command ends with the `clock:` line (time used, time left, what has been cut), a sweep caps each run at the time left less a 15-minute tail reserve (a declined run is a `budget` row whose message starts with `clock:`, and it is run again by a later sweep that has the time), the stability bisection stops with the bracket it has, and `time` leaves unaffordable rows untimed. Below 75, 60, 45, 30 and 15 minutes left, the commands cut in turn the 100-beat sweep, `time` and `report`, `sweep --force`, every scheme but BIRL-M (or BIMGRL) with the bisection, and every sweep. `sweep`, `time` and `report` take `--ignore-clock`; `bimgrl clock <model_dir>` prints the ladder and every skipped step; `--limit` changes the limit of a running clock. The marks are the constants of `src/bimgrl/clock.py`.
 
 ## Phase 1: intake
 
@@ -41,7 +54,7 @@ bimgrl intake <model_dir> [--voltage NAME] [--force]
 
 Reads `model.ode`, writes a draft `meta.toml` and `bimgrl/intake.md`. The draft names the membrane potential (the only mV state, else the state most derivatives depend on), the cytosolic Ca, Na and K (by normalised name), the stimulus (the half-open `stim_*` parameters if present, else a warning that the stimulus must be rewritten), and the `[compartments]` table: the SR (the free Ca pool with the largest initial value), the junction (the pool exchanging directly with the SR), the sub-sarcolemmal pool, the release channel (dimensionless states coupled both ways to the junction and depending on the SR), its open states, and the INa gates (HH gates named m*, h*, j* or containing "na").
 
-**Gate.** The agent shows the user every row marked *confirm* in `intake.md` and edits `meta.toml` accordingly. Compartment naming is the one thing no heuristic gets right every time, and every block rule downstream depends on it. The agent decides alone: nothing here.
+**Gate.** The agent shows the user every row marked *confirm* in `intake.md` and edits `meta.toml` accordingly, asking in the plain form of `asking.md` (the table's "what this is" column says what each role is). Compartment naming is the one thing no heuristic gets right every time, and the structural block rules depend on it; a role the model does not have stays empty, and the generic rule then chooses the blocks from the stiffness alone. A voltage row marked GUESS means no state is in mV: confirm it, or stop if the model has no membrane potential. The agent decides alone: nothing here.
 
 ## Phase 2: structure
 
@@ -101,9 +114,9 @@ The baseline is RL (the HH gates exponential, everything else forward Euler), th
 bimgrl propose <model_dir> [--base rl|grl] [--dt 0.1] [--threshold -20] [--nest-v-markov] [--no-write]
 ```
 
-The rule engine of `block-rules.md` over the outputs of phases 2, 3 and 5 and the compartments of `meta.toml`. With `--base rl` (default, BIRL-M): the HH gates as `stiff_states`, implicit blocks for every channel or release Markov chain, one calcium block over every Ca-carrying state (merged with any chain that shares a state), the V/INa block, straddling blocks nested, `freeze_boundary_fluxes = true`, and the dyad block as a judgment call. With `--base grl` (BIMGRL): every binding cluster that owns a stiff mode, the SR and the junction joined, the V/INa block, the dyad block. Every block carries the finding that produced it. gotranx's own `suggest-blocks` runs at the target step with the same base for comparison; every difference in the implicit blocks or the V block goes into the judgment calls for Gate 6, with the `BIRL-M-auto` (or `BIMGRL-auto`) sweep that measures both. Writes `<model_dir>/blocks.toml` (unless it exists), `bimgrl/blocks_proposed.toml`, `propose.md`, `propose.json`.
+The rule engine of `block-rules.md` over the outputs of phases 2, 3 and 5 and the compartments of `meta.toml`. With `--base rl` (default, BIRL-M): the HH gates as `stiff_states`, implicit blocks for every channel or release Markov chain, one calcium block over every Ca-carrying state (merged with any chain that shares a state), the V/INa block, the generic rule (an implicit block for every stiff mode in `stiffness.json` whose owners are still on forward Euler, with the whole chain or binding cluster of a member), straddling blocks nested, `freeze_boundary_fluxes = true`, and the dyad block as a judgment call. Both bases report "Stiff modes and what covers them" (what advances each owner of each stiff mode, the share left on forward Euler, and the step limit that remains) and "Nesting candidates" (states that share a fast mode with V, or act on V and are fast only while V is; listed, not applied). With `--base grl` (BIMGRL): every binding cluster that owns a stiff mode, the SR and the junction joined, the V/INa block, the dyad block. Every block carries the finding that produced it. gotranx's own `suggest-blocks` runs at the target step with the same base for comparison; every difference in the implicit blocks or the V block goes into the judgment calls for Gate 6, with the `BIRL-M-auto` (or `BIMGRL-auto`) sweep that measures both. Writes `<model_dir>/blocks.toml` (unless it exists), `bimgrl/blocks_proposed.toml`, `propose.md`, `propose.json`.
 
-**Gate.** The agent walks the user through `propose.md`: each block and its reason, the "left explicit" list, and the "judgment calls" list (the dyad block under the RL base; the SR in the dyad and Ca-dependent gates such as fCass under the GRL base; a voltage-dependent chain outside the V block). Changes are made in `blocks.toml` and noted in NOTES.md with `bimgrl log --section Blocks --line "..."`.
+**Gate.** The agent walks the user through `propose.md`: each block and its reason, the "left explicit" list, the coverage table (every UNCOVERED row), and the "judgment calls" list (the dyad block and any mode no single state owns under the RL base; the SR in the dyad and Ca-dependent gates such as fCass under the GRL base; the nesting candidates), each put as `asking.md` shows. Changes are made in `blocks.toml` and noted in NOTES.md with `bimgrl log --section Blocks --line "..."`.
 
 ## Phase 8: sweep and validate
 
@@ -153,4 +166,5 @@ Timing is serial, in C, best of N, one beat; it must run on an idle machine. The
 | codegen | `generated/` |
 | validate | `validation_<name>.md`, `validation_<name>.json` |
 | log | `../NOTES.md` |
+| clock | `clock.json` (start, limit, every command with its wall time, every skipped step) |
 | report | `report.md`, `report.json`, `error_vs_cost.png` |

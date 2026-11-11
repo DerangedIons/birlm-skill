@@ -8,7 +8,8 @@ participation above 0.1. Two scheme views: GRL as gotranx generates it (exponent
 Jacobian diagonal is non-zero) and RL+FE (exponential for the HH gates only, as TWorld.jl).
 
 Predictions: P1 = 2|Re λ|/|λ|² of the stiffest mode owned (≥ 50 % participation) by states
-advanced by forward Euler; P2 = the largest h at which the linearised scheme step does not grow
+advanced by forward Euler (each owner-set row also keeps every state's largest participation above
+0.02, from which ``propose`` works out what its blocks leave on forward Euler); P2 = the largest h at which the linearised scheme step does not grow
 faster than the model (catches coupled modes that GRL damps poorly).
 """
 
@@ -22,7 +23,8 @@ from .vendored.stiffness import OWNER, fe_limit, p2_checkpoint, participation
 from .workspace import Workspace, md_table
 
 THRESHOLD = -20.0  # Re λ (/ms) below which a mode is stiff, unless the agent probes another
-PAPER_OFFSETS = (-1.0, 0.5, 1.0, 2.0, 3.0, 5.0, 10.0, 20.0, 50.0, 100.0, 200.0, 300.0, 500.0)
+PART_FLOOR = 0.02  # participation kept per mode, so propose can tell what its blocks leave uncovered
+PAPER_OFFSETS =(-1.0, 0.5, 1.0, 2.0, 3.0, 5.0, 10.0, 20.0, 50.0, 100.0, 200.0, 300.0, 500.0)
 
 
 def checkpoints(protocol, every_ms: float) -> tuple[np.ndarray, np.ndarray]:
@@ -48,6 +50,7 @@ def modes_at(J: np.ndarray, names, fe_grl: set, fe_rl: set, threshold: float) ->
                 lam_re=float(lam[j].real), lam_im=float(lam[j].imag), tau_us=1e3 / abs(lam[j].real),
                 fe_limit_ms=fe_limit(lam[j]), owners=owners,
                 owner_key=";".join(sorted(n for n, _ in owners)),
+                part={names[k]: float(p[k, j]) for k in range(len(names)) if p[k, j] > PART_FLOOR},
                 fe_share_grl=float(sum(p[k, j] for k in range(len(names)) if names[k] in fe_grl)),
                 fe_share_rl=float(sum(p[k, j] for k in range(len(names)) if names[k] in fe_rl)),
             )
@@ -81,9 +84,12 @@ def analyse(model: Model, structure: dict, protocol, every_ms: float, threshold:
     table: dict[str, dict] = {}
     for entry in per_t:
         for m in entry["modes"]:
-            row = table.setdefault(m["owner_key"], dict(owners=m["owners"], min_lam_re=0.0, t=None, n=0, part=[], fe_share_grl=0.0, fe_share_rl=0.0))
+            row = table.setdefault(m["owner_key"], dict(owners=m["owners"], min_lam_re=0.0, t=None, n=0, part=[], full={}, fe_share_grl=0.0, fe_share_rl=0.0))
             row["n"] += 1
             row["part"].append(dict(m["owners"]))
+            # the per-state maximum over the checkpoints; dropped from the per-checkpoint record
+            for n, x in m.pop("part").items():
+                row["full"][n] = max(row["full"].get(n, 0.0), x)
             row["fe_share_grl"] = max(row["fe_share_grl"], m["fe_share_grl"])
             row["fe_share_rl"] = max(row["fe_share_rl"], m["fe_share_rl"])
             if m["lam_re"] < row["min_lam_re"]:
@@ -96,7 +102,7 @@ def analyse(model: Model, structure: dict, protocol, every_ms: float, threshold:
             dict(
                 owners=states, min_lam_re=row["min_lam_re"], lam_im=row.get("lam_im", 0.0), t_at_min=row["t"],
                 tau_us=1e3 / abs(row["min_lam_re"]), fe_limit_ms=fe_limit(complex(row["min_lam_re"], row.get("lam_im", 0.0))),
-                n_checkpoints=row["n"], mean_participation=mean_part,
+                n_checkpoints=row["n"], mean_participation=mean_part, max_participation=row["full"],
                 update_grl={n: upd_grl[n] for n in states}, update_rl={n: upd_rl[n] for n in states},
                 fe_share_grl=row["fe_share_grl"], fe_share_rl=row["fe_share_rl"],
             )

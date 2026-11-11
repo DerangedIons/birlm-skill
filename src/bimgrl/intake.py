@@ -71,7 +71,11 @@ def draft_meta(model_dir: Path, voltage: str | None = None) -> tuple[ModelMeta, 
             evidence["voltage"] = f"the only state in mV"
         else:
             voltage = _membrane_potential(None, names, jac)
-            evidence["voltage"] = "the state that most other derivatives depend on (no unique mV state)"
+            evidence["voltage"] = (
+                "GUESS: no unique state in mV, so this is the state that most other derivatives depend on. Confirm that it is the "
+                "membrane potential (or pass --voltage). A model with no membrane potential is not supported yet: the accuracy "
+                "checks are action-potential measures *confirm*"
+            )
     else:
         evidence["voltage"] = "given on the command line"
 
@@ -191,11 +195,29 @@ def _hh_gates(ode, jac) -> list[str]:
     return hh_gates(ode, state_dependencies(ode), diagonal_jacobian(ode))
 
 
+# one plain line per field, for the reader who knows the numerics or the biology but not both
+_PLAIN = {
+    "voltage": "the electrical potential across the cell membrane; every current depends on it",
+    "calcium (cytosol)": "free calcium in the bulk of the cell, the signal that drives contraction",
+    "sodium": "sodium concentration inside the cell",
+    "potassium": "potassium concentration inside the cell",
+    "sr": "the cell's internal calcium store (sarcoplasmic reticulum); it empties and refills every beat",
+    "junction": "the tiny space where the store releases its calcium; small volume, so its concentration changes very fast",
+    "subsarcolemma": "a thin layer of the cell just under the membrane, between the junction and the bulk",
+    "release_channel": "the states of the channel that lets calcium out of the store (the RyR)",
+    "release_open": "those of the release-channel states in which the channel is open",
+    "na_gates": "the on/off variables of the fast sodium current, which produces the rapid rise of the voltage",
+    "stimulus": "the current pulse that triggers each beat",
+    "protocol": "whether the cell is paced by a stimulus or beats on its own",
+}
+
+
 def to_markdown(meta: ModelMeta, info: dict) -> str:
     ev = info["evidence"]
     out = [f"# Intake of `{meta.id}`", ""]
     out.append("Draft `meta.toml` written. Confirm every row marked *confirm* before `bimgrl propose`.")
     out += ["", "## Guesses and their evidence", ""]
+    out.append("A field left at `-` is fine when the model has no such part: the blocks are then chosen from the stiffness analysis alone.")
     rows = [
         ["voltage", meta.voltage, ev.get("voltage", "")],
         ["calcium (cytosol)", meta.calcium or "-", ev.get("calcium", "")],
@@ -210,7 +232,7 @@ def to_markdown(meta: ModelMeta, info: dict) -> str:
         ["stimulus", repr(meta.stim) if meta.stim else "-", ev.get("stimulus", "")],
         ["protocol", meta.protocol, "paced if a stimulus exists"],
     ]
-    out.append(md_table(["field", "value", "evidence"], rows))
+    out.append(md_table(["field", "what this is", "value", "evidence"], [[r[0], _PLAIN[r[0]], *r[1:]] for r in rows]))
     out += ["", "## States", ""]
     out.append(
         md_table(
