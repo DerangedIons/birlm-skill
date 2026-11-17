@@ -1,6 +1,6 @@
 [project]
 name = "bimgrl"
-version = "0.2.0"
+version = "0.3.0"
 description = "Apply block Rush-Larsen (BIRL-M by default, or the paper's BIMGRL) to a cardiac cell model: stiffness, invariants, blocks, codegen, validation"
 readme = "README.md"
 license = "MIT"

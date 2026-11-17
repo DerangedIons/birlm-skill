@@ -4,7 +4,7 @@ description: Accelerate the fixed-step integration of a cardiac cell model with 
 license: MIT
 allowed-tools: Bash, Read, Write, Edit, Glob, Grep, AskUserQuestion
 metadata:
-  version: "0.2.0"
+  version: "0.3.0"
   paper: "Targeted implicit integration accelerates tissue simulations of advanced cardiac cell models"
 ---
 
