@@ -19,6 +19,7 @@ from pathlib import Path
 
 import numpy as np
 
+from .clock import MAIN_SCHEMES
 from .model import Model
 from .protocol import Protocol, allowed_dt, dt_base, protocols, save_every
 from .stepper import SCHEMES, CStepper, SchemeConfig, compiler, scheme_config
@@ -27,6 +28,8 @@ from .validate import compare, passes, status_of, violations
 from .vendored.stimulus import DT_GRID
 from .vendored.sweep import bisect_k  # noqa: E402
 from .workspace import Workspace, md_table
+
+TARGET_DT = 0.1  # ms
 
 RUN_KEY = ("scheme", "config_key", "protocol", "beats", "dt")
 COLUMNS = [
@@ -244,7 +247,30 @@ def sweep(ws: Workspace, labels=("RL", "BIRL-M"), protocol_name: str = "B", beat
                 break
         if stability and label in ("GRL", "RL", "FE"):
             stability_limit(runner, protocol, label, [r for r in rows if r["scheme"] == label], budget, clock)
+        if label in MAIN_SCHEMES:  # the schemes handed back
+            print(target_verdict([r for r in rows if r["scheme"] == label], label, target_dt(ws), kind, has_ca), flush=True)
     return rows
+
+
+def target_dt(ws: Workspace) -> float:
+    """The target step of the session: the `--dt` of `propose`, 0.1 ms before any proposal"""
+    return float(ws.read_json("propose.json").get("dt", TARGET_DT)) if (ws.out / "propose.json").exists() else TARGET_DT
+
+
+def target_verdict(rows: list[dict], label: str, target: float, kind: str, has_ca: bool) -> str:
+    """Whether `label` meets the moderate thresholds at the target step or above it. This line, not a
+    pass at some smaller step, is what ends the tuning: against a baseline limited to microseconds
+    every step looks large, and a scheme one change short of the target would be handed back"""
+    ran = [r for r in rows if r["status"] not in ("budget", "n/a")]
+    met = [float(r["dt"]) for r in ran if float(r["dt"]) >= target * (1 - 1e-9) and passes(r, "moderate", kind, has_ca)]
+    if met:
+        return f"target step {target:g} ms: met, {label} passes the moderate thresholds at dt {max(met):g} ms"
+    here = next((r for r in ran if math.isclose(float(r["dt"]), target, rel_tol=1e-9)), None)
+    if here is None:
+        return f"target step {target:g} ms: NOT shown, {label} has no run there (add it with --dt {target:g})"
+    why = here.get("violations") or here.get("message") or "a moderate threshold fails"
+    return (f"target step {target:g} ms: NOT met, {label} is {here['status']} there ({why}). "
+            "A pass at a smaller step does not end the tuning: what fails here is the next round")
 
 
 class _OutOfBudget(Exception):

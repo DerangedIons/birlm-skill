@@ -313,7 +313,7 @@ def main(argv=None):
     p.add_argument("model_dir")
     p.add_argument("--base", default="rl", choices=["rl", "grl"],
                    help="rl: BIRL-M (Rush-Larsen base, frozen boundary fluxes; default); grl: BIMGRL (the paper's rules)")
-    p.add_argument("--dt", type=float, default=0.1, help="target time step for the gotranx suggest-blocks comparison")
+    p.add_argument("--dt", type=float, default=0.1, help="target time step: the step the tuning has to reach, and the step of the gotranx suggest-blocks comparison")
     p.add_argument("--threshold", type=float, default=-20.0)
     p.add_argument("--nest-v-markov", action="store_true", help="nest voltage-dependent Markov blocks in the V block")
     p.add_argument("--no-write", action="store_true", help="do not write <model_dir>/blocks.toml")

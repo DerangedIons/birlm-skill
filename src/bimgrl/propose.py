@@ -230,7 +230,14 @@ def propose(ws: Workspace, dt: float = 0.1, stiff_threshold: float = -20.0, nest
                 if set(b["states"]) & feeds_v and not set(b["states"]) <= set(vblock["states"]):
                     vblock["states"] += b["states"]
                     vblock["why"] += f"; nested the voltage-dependent chain {', '.join(b['states'])}"
-    nesting = _nesting_candidates(stiff, stiff_threshold, v, vblock, feeds_v, implicit)
+    else:
+        # every chain that acts on V from an implicit block outside the V block goes to the user, whenever it is
+        # fast: with V sub-stepped it is advanced once per step from averaged rates and a start-of-step Jacobian
+        # (the Gauthier CaRU chain is fast through the whole beat, so the nesting candidates below do not list it)
+        for b in implicit:
+            if "Markov" in b["why"] and set(b["states"]) & feeds_v and not any(set(b["states"]) <= set(s["states"]) for s in substep):
+                judgment.append(f"the voltage-dependent chain {', '.join(b['states'])} is an implicit block outside the V block; nest it (--nest-v-markov) if its states go negative at large steps (Winslow 1999 L-type)")
+    nesting =_nesting_candidates(stiff, stiff_threshold, v, vblock, feeds_v, implicit)
 
     # what covers each stiff mode, and the forward Euler limit the blocks leave
     coverage, residual = _coverage(modes, implicit, substep, explicit)
@@ -510,7 +517,8 @@ def _calcium_block(implicit: list[dict], inv: dict, comps, cluster_of: dict, jud
 def to_markdown(r: dict) -> str:
     base = r.get("base", "grl")
     out = ["# Proposed blocks", "", f"Base: {'Rush-Larsen (BIRL-M), frozen boundary fluxes' if base == 'rl' else 'generalized Rush-Larsen (BIMGRL)'}", "",
-           f"Validation: {r['valid']}", ""]
+           f"Validation: {r['valid']}", "",
+           f"Target step: {r['dt']:g} ms (`--dt`). The tuning ends when the scheme meets the moderate thresholds there; `sweep` says so in its `target step` line.", ""]
     if base == "rl":
         out += [f"Stiff states (exponential under the base): {', '.join(r['stiff_states']) or 'none'}", ""]
     out += ["## Implicit blocks", ""] + ([f"- {', '.join(b['states'])}: {b['why']}" for b in r["implicit"]] or ["- none"])
